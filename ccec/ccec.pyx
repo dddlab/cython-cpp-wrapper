@@ -3,13 +3,6 @@
 
 from eigency.core cimport *
 
-# cimport eigency.conversions
-# from ccec.eigency cimport *
-
-
-# import eigency
-# include "../eigency.pyx"
-
 cdef extern from "ccec/ccec_cpp.h":
 
      cdef long _function_w_vec_arg "function_w_vec_arg"(Map[VectorXd] &)
