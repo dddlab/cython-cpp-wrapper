@@ -8,7 +8,7 @@ extensions = [
     Extension(
         "ccec.ccec",
         ["ccec/ccec.pyx"],
-        include_dirs=[".", "ccec", "eigen-3.4.0"] + eigency.get_includes(include_eigen=False),
+        include_dirs=[".", "ccec", "ccec/eigen"] + eigency.get_includes(include_eigen=False),
         language = "c++"
     ),
 ]
