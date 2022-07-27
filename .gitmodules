@@ -1,4 +1,4 @@
-[submodule "ccec/eigen"]
-	path = ccec/eigen
+[submodule "eigen"]
+	path = eigen
 	url = https://gitlab.com/libeigen/eigen.git
 	shallow = true
