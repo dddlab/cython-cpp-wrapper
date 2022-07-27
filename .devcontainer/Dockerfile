@@ -22,3 +22,5 @@ RUN curl https://cli.github.com/packages/githubcli-archive-keyring.gpg | apt-key
     apt-get install -y --no-install-recommends gh
 
 USER ${NB_UID}
+
+RUN pip install pytest eigency
