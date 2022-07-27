@@ -1,0 +1,766 @@
+---
+title: "An R package for Sparse Graphical Models"
+author: "Zhipu Zhou, Sang-Yun Oh"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+bibliography: refs.bib
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, setup, include=FALSE}
+if(!require("MASS")){ stop("You need to install the package MASS")}
+if(!require("knitr")){ stop("You need to install the package knitr")}
+if(!require("gridExtra")){ stop("You need to install the package gridExtra")}
+if(!require("kableExtra")){ stop("You need to install the package kableExtra")}
+if(!require("MASS")){ stop("You need to install the package MASS")}
+if(!require("dplyr")){ stop("You need to install the package dplyr")}
+if(!require("knitr")){ stop("You need to install the package knitr")}
+knitr::opts_chunk$set(cache = FALSE)
+indent1 = '    '
+indent2 = paste(rep(indent1, 2), collapse='')
+indent3 = paste(rep(indent1, 3), collapse='')
+```
+
+
+
+# Introduction
+
+Graphs have played an important role in modern statistical analysis due to their ability to intuitively capture and describe relationships among a group of variables. Sparse estimation for the inverse covariance matrix is a popular way to characterize the underlying dependency relationships. There have existed several methods for inverse covariance matrix estimation. In Gaussian setup, @Friedman2008 propose graphical LASSO estimator which is implemented using function \code{glasso} in the \proglang{R} package \pkg{glasso}. This method depends on a Gaussian functional form. To address this gap, @Peng2009 introduce SPACE (Sparse PArtial Correlation Estimation) method that can be implemented in the \proglang{R} package \pkg{space}. However, @Khare2015 show that SPACE algorithm might fail to converge in some simple cases. Instead, they propose CONCORD estimator from a convex pseudo-likelihood function with $l_1$ penalty, and prove that its convergence is guaranteed. They apply coordinate-wise descent algorithm to solve the CONCORD optimization problem. @Ali2017 realize that the convex pseudo-likelihood framework has not leveraged the extensive array of methods for convex optimization, and propose two proximal gradient methods (ISTA and FISTA) for the more general CONCORD optimization problem with elastic net penalty. The solution is called PseudoNet estimator. It is consistent and does not saturate, meaning that in high dimensional case, there is no hard limit on the number of nonzero entries in the estimator.
+
+
+
+We develop an \proglang{R} package called \pkg{gconcord} that can compute both CONCORD and PseudoNet estimators. Because $l_1$ penalty is part of an elastic net penalty, CONCORD optimization problem can be seen as a special case of that of PseudoNet, and for sake of simplicity we call both CONCORD and PseudoNet as graphical CONCORD. Our package provides coordinate-wise descent method and two proximal gradient methods, ISTA (iterative soft-thresholding algorithm) and FISTA (fast ISTA) discussed in @Sang-YunOh2014, to solve the optimization problem. The package is flexible and user-friendly because:
+
+* The package is composed of less than ten functions. These functions cover all aspects that users may need in the application of graphical CONCORD, including cross validation, graph development, and results visualization. All functions can be classified into three groups:
+
+    - Core functions which conduct cross validation for the tuning parameters and compute graphical CONCORD estimator for given input data and tuning parameters. This group includes the solver function \code{gconcord}, cross validation function \code{cv.gconcord}, and predictive risk loss function \code{pred.risk}.
+    - Visualization functions which help users to visualize the cross validation results for tuning parameters or build a graph based on graphical CONCORD estimator. These functions include \code{graphplot} and \code{cvplot}.
+    - Supporting functions which support the application of the package. They include \code{zero.count} and \code{get.data}.
+    
+
+* The package allows users to define their own loss function in cross validation, and enables users to incorporate their prior belief of the graph sparsity patterns. In addition, the graphical CONCORD solver allows the input to be a sample covariance matrix when sample data are not available. Hence, the application of the package can be tailored to users needs and special situations.
+
+* To numerically solve the optimization problem, the graphical CONCORD solver provides all three methods that are available among the current research literatures. These methods / algorithms have different running times and provide users more choices.
+
+The rest of this paper is organized as follows: In section 2 we briefly present the optimization problem of graphical CONCORD and its optimization methods available in our package; In section 3, we discuss the main functions in our package and how to use them; Section 4 provides some application examples; Section 5 briefly discusses the complexity of different computation methods; The last section summarizes our paper.
+
+
+
+
+
+
+
+
+# The Model of Graphical CONCORD
+
+Suppose that $y_1, y_2, \cdots, y_n$ are i.i.d samples taking values in $\mathbb{R}^p$ ($p\geq2$) from a same distribution with unknown true covariance matrix $\Sigma$. The sample covariance matrix can be calculated as:
+
+\begin{equation*}
+S = ((s_{ij}))_{1\leq i,j\leq p} = \frac{1}{n-1}\sum_{i=1}^n(y_i - \bar{y})(y_i - \bar{y})^{\top}\quad\text{where}\quad
+\bar{y} = \frac{1}{n}\sum_{i = 1}^ny_i
+\end{equation*}
+
+Let $\Omega_D$ and $\Omega_{\backslash D}$ denote the diagonal and off-diagonal matrix of $\Omega = ((\omega_{ij}))_{1\leq i,j\leq p}$. $\|\Omega\|_1$ and $\|\Omega\|_F$ represent the $l_1$ norm and Frobenius norm of matrix $\Omega$, respectively. By @Ali2017, a graphical CONCORD estimator is the solution of the following optimization problem
+
+\begin{equation} \label{opt1}
+\begin{split}
+&\min_{\Omega\in\mathbb{R}^{p\times p}}Q_{\text{con}}(\Omega|S, \Lambda_1, \lambda_2) \\
+= &\min_{\Omega\in\mathbb{R}^{p\times p}}\quad 
+\biggl(-\frac{1}{2}\log\text{det}(\Omega_D^2) + \frac{1}{2}\text{tr}(S\Omega^2)
++\|\Lambda_1\circ\Omega_{\backslash D}\|_1 + \lambda_2\|\Omega\|_F^2\biggr)
+\end{split}
+\end{equation}
+
+where $\Lambda_1 = ((\lambda_{i,j}))_{1\leq i,j\leq p}$ is a $p\times p$ matrix parameter for $l_1$ penalty while $\lambda_2\geq0$ is a scalar parameter for Frobenius norm penalty. $\circ$ denotes an element-wise multiplication between two matrices. If all non-diagonal elements in $\Lambda_1$ are the same, i.e. $\lambda_{i,j} := \lambda_1 \geq 0$ for all $1\leq i, j\leq p$ and $i\neq j$, then the $l_1$ penalty term $\|\Lambda_1\circ\Omega_{\backslash D}\|_1 = \lambda_1\|\Omega_{\backslash D}\|_1$ where $\lambda_1$ is a scalar parameter for $l_1$ penalty term. In addition, if $\lambda_2 = 0$, the optimization problem for graphical CONCORD is reduced to the pseudo-likelihood function for CONCORD estimator in @Khare2015. 
+
+
+Our package provides two methods to solve the optimization problem: coordinate-wise descent algorithm, which is discussed by @Khare2015, and two proximal gradient methods, including ISTA and FISTA discussed in @Sang-YunOh2014. The coordinate-wise descent algorithm minimizes $Q_{\text{con}}(\Omega|S, \Lambda_1, \lambda_2)$ via cyclic coordinate-wise descent that alternates between updating diagonal and off-diagonal elements. Appendix 1 shows that the updating operator $T_{ij}: \mathbb{R}^{p\times p}\mapsto\mathbb{R}$ is given by
+
+\begin{equation*}
+\begin{split}
+(T_{ij}(\Omega))_{ij} & = 
+\frac{S_{2\lambda_{ij}}\biggl(-\biggl(\sum_{j^{\prime}\neq j}\omega_{ij^{\prime}}s_{jj^{\prime}} + \sum_{i^{\prime}\neq i}\omega_{i^{\prime} j}s_{ii^{\prime}}\biggr)\biggr)}{s_{ii}+s_{jj}+4\lambda_2}\\
+(T_{ii}(\Omega))_{ii} & =
+\frac{-\sum_{j\neq i}\omega_{ij}s_{ij} + \sqrt{\biggl(\sum_{j\neq i}\omega_{ij}s_{ij}\biggr)^2 + 4(s_{ii} + 2\lambda_2)}}{2(s_{ii} + 2\lambda_2)}
+\end{split}
+\end{equation*}
+
+
+where $S_{\eta}(x):= \text{sign}(x)(|x| - \eta)_+$. In proximal gradient methods, the objective function $Q_{\text{con}}(\Omega|S, \Lambda_1, \lambda_2)$ is split into a smooth function $g$ and a non-smooth function $h$ such that
+
+
+\begin{equation*}
+g(\Omega) = -\frac{1}{2}\log\text{det}(\Omega_D^2) + \frac{1}{2}\text{tr}(S\Omega^2) + \lambda_2\|\Omega\|_F^2,\quad
+h(\Omega) = \|\Lambda_1\circ\Omega_{\backslash D}\|_1
+\end{equation*}
+
+We provide two implementations for proximal gradient method: ISTA and FISTA. In each iteration of proximal gradient method, it takes one step in the direction of the negative gradient of $g$ having gradient function
+
+\begin{equation*}
+\nabla g(\Omega) = -\Omega_D^{-1} + \frac{1}{2}(S\Omega + \Omega S) + \lambda_2\Omega
+\end{equation*}
+
+and then apply efficient proximal operator for $h$. The step size is chosen using backtracking line search. The line search for $k$-th iteration starts with an initial step size $\tau_{(k,0)}$ and reduces the step size to $\tau_{(k,l)} = c^l\tau_{(k,0)}$ for $l = 0, 1, \cdots$ with a constant factor $c$ until a stopping criterion is satisfied. Our package provides three ways to choose the initial step size $\tau_{(k,0)}$: (a) a constant starting step size $\tau_{(k,0)}=1$, (b) a feasible step size found from previous iteration, (c) Barzilai-Borwein heuristic step size in @Sang-YunOh2014.
+
+
+
+
+
+
+
+
+
+
+# The Software
+
+
+The package \pkg{gconcord} contains three groups of functions: (1) core functions that compute the graphical CONCORD estimator and conduct cross validation for its tuning parameters (2) visualization functions which help users to visualize the cross validation results and build a graph; (3) supporting functions that support the application of the package. All functions are listed in Table \ref{Tab1}.
+
+
+
+\begin{table}[h]
+\centering
+\begin{tabular}{l l}
+\hline
+\multicolumn{2}{l}{\textit{Core functions}}\\
+\hline
+\code{gconcord}     & Graphical CONCORD function\\
+\code{cv.gconcord}  & Cross validation function for tuning parameters\\
+\code{pred.risk}    & Predictive risk loss function\\
+\hline
+\multicolumn{2}{l}{\textit{Visualization functions}}\\
+\hline
+\code{cvplot}       & Visualization for cross validation results\\
+\code{graphplot}    & Graph construction function\\
+\hline
+\multicolumn{2}{l}{\textit{Supporting functions}}\\
+\hline
+\code{zero.count}   & Measurement of sparsity of an estimator\\
+\code{get.data}     & Data extraction for DJIA historical data\\
+\hline
+\end{tabular}
+\caption{Groups of functions}
+\label{Tab1}
+\end{table}
+
+
+
+## Graphical CONCORD function
+
+
+The \code{gconcord} function computes the graphical CONCORED estimator. The function scales the input data or the input sample covariance matrix before computing graphical CONCORD estimator. Specifically, assume the input sample covariance (or the sample covariance of input data) is $S$. Let $D = S_{D}$. Then the sample correlation matrix is $\Phi = D^{-1/2}SD^{-1/2}$. \code{gconcord} function will compute the graphical CONCORD estimation for $\Phi$ as
+
+\begin{equation*}
+\Psi = \min_{\Omega\in\mathbb{R}^{p\times p}} Q_{\text{con}}(\Omega|\Phi, \Lambda_1, \lambda_2)
+\end{equation*}
+
+and returns $\hat\Omega = D^{-1/2}\Psi D^{-1/2}$ as the sparse inverse covariance estimation for the inputs. The benefit of scaling is that the optimal tuning parameters would be relatively stable and independent of the magnitudes of variables, and it will not be a large concern for users to find out appropriate ranges of candidate values for the tuning parameters in cross validation. The function has the following arguments:
+
+* \code{data}: An $n\times p$ numerical data frame or matrix. 
+	
+* \code{S}: An optional argument representing the sample covariance matrix of data. This is used when raw data are not available or contains missing values. If both \code{data} and \code{S} are provided, only the input \code{data} is used.
+	
+* \code{lambda1}: It can be two types: (1) a non-negative scalar tuning parameter for $l_1$ penalty. In this case it is equivalent to $\lambda_1\|\Omega_{\backslash D}\|_1 = \|\Lambda_1\circ\Omega_{\backslash D}\|_1$ where $\Lambda_1 = ((\lambda_1))_{1\leq i,j\leq p}$, (2) a $p\times p$ symmetric penalty matrix with non-negative element-wise scalar $l_1$ penalties for $\Omega_{\backslash D}$, the diagonal elements of $\Lambda_1$ are ignored in the computation.
+	
+* \code{lambda2}: An optional argument. It is a non-negative scalar tuning parameter for Frobenius norm penalty. The default value is 0.
+	
+* \code{method}: An optional argument. It is a character string representing the optimization methods. Available choices are \code{"coordinatewise"}, \code{"ista"}, and \code{"fista"}. The default is \code{"coordinatewise"}.
+	
+* \code{tol}: An optional argument. It is a numerical number for convergence threshold in optimization method. The default is \code{1e-5}.
+	
+* \code{maxit}: An optional argument. It is the maximum number of iterations in the optimization. The default is $100$.
+	
+* \code{steptype}: An optional argument only works for ISTA and FISTA. It is the type of initial step size discussed in Section 2. \code{0} for step size heuristic of Barzilai-Borwein, \code{1} for $\tau_{(k,0)} = 1$, and \code{2} for the feasible step size found from previous iteration.
+
+
+
+The \code{gconcord} function will return a list object containing three variables:
+
+* \code{omega}: The estimation of sparse inverse covariance matrix $\hat\Omega$.
+	
+* \code{nitr}: The total number of iterations in the computation.
+	
+* \code{maxdiff}: A numerical vector presenting the convergence measure $d_k$ for $k$-th iteration, $k = 1, 2,\cdots,$\code{nitr}. Suppose that the optimizer in $k$-th iteration is $\hat\Omega^{(k)}$, then for coordinate-wise descent algorithm
+	
+	\begin{equation*}
+	d_k = \max_{1\leq i, j\leq p} |\hat\Omega_{ij}^{(k)} - \hat\Omega_{ij}^{(k-1)}|
+	\end{equation*}
+	
+	and for both ISTA and FISTA, 
+	
+	\begin{equation*}
+	d_k = \frac{\|\nabla g(\hat\Omega^{(k)}) + \partial h(\hat\Omega^{(k)})\|_F}{\|\hat\Omega^{(k)}\|_F}
+	\end{equation*}
+
+
+
+where $\partial h(\hat\Omega^{(k)})$ is the subgradient of function $h$ evaluated at $\hat\Omega^{(k)}$. The outputs \code{nitr} and \code{maxdiff} help user to choose appropriate inputs for \code{tol} and \code{maxit}. For instance, if \code{nitr = maxit} and the last element of the vector \code{maxdiff} is greater than \code{tol}, then it suggests that the solution does not reach the convergence threshold, and a larger input of \code{maxit} may be more appropriate. Our package provides the visualization function \code{graphplot} to develop and plot a graph based on the computed CONCORD estimator. Details can be found in the Appendix part.
+
+
+## Cross validation
+
+
+$K$-fold cross validation is generally used to find out optimal tuning parameters in (\ref{opt1}). In $K$-fold cross validation, we split the data into $K$ roughly equal-sized parts. We pick up a candidate pair of $\lambda_1, \lambda_2$ and use the data in $k$-th fold as the test data while use the remaining data of the remaining $K-1$ folds as the training data. We use the training data to compute CONCORD estimator $\hat\Omega$ and use the test data to calculate the validation errors under a pre-defined loss function $\mathcal{L}(\hat\Omega, Y)$. Repeat the process for $k = 1, 2,\cdots,K$ and calculate the average loss value. The optimal combination of tuning parameters would be the one whose average loss is minimal. Users can refer to Chapter 7 Section 7.10 of \textit{The Elements of Statistical Learning}\footnote{Trevor Hastie, Robert Tibshirani, Jerome Friedman. \textit{The Elements of Statistical Learning}. 2nd Edition.} for more information.
+
+
+The \code{cv.gconcord} function is flexible and easy to use in two aspects. First, graphical CONCORD model requires two tuning parameters. If a user does not provide a penalty matrix $\Lambda_1$ that specifies $l_1$ penalty parameters on an element-wise basis, then \code{cv.gconcord} assumes that $\Lambda_1 = ((\lambda_1))_{1\leq i,j\leq p}$ and will find out the optimal values for $\lambda_1$ and $\lambda_2$ via $K$-fold cross validation. Second, users can define their own loss functions in cross validation. The function has the following arguments:
+
+
+* \code{data}: A $n\times p$ numerical matrix or data frame with sample size $n$ and dimension $p$.
+	
+* \code{rand}: An optional argument. It is an integer vector of the length the number of samples in the dataset, assiging samples to different groups for cross validation. If no input exists (by default), the function would automatically create an integer vector for \code{K} folds.
+	
+* \code{FUN}: An optional argument. It is a user-defined loss function used in cross validation. The input is the name of the defined loss function without any quotation marks. The user-defined loss function should have only two arguments:
+
+  + \code{omega}: a $p\times p$ matrix of the graphical CONCORD estimator $\hat\Omega$ under a specific combination of $\lambda_1, \lambda_2$; and
+  + \code{data}: the data matrix used to evaluate the loss of $\hat\Omega$.
+
+	The loss function should return a loss value. By default, the loss function is predictive risk.
+	
+* \code{lam1.vec}: An optional argument. It can be either (1) a numerical vector containing candidate values of $\lambda_1$ for $\lambda_1\|\Omega_{\backslash D}\|_1$, or (2) a penalty matrix $\Lambda_1$ in $\|\Lambda_1\circ\Omega_{\backslash D}\|_1$, in this case, cross validation will only be conducted for $\lambda_2$. If no input exists (by default), the function will deem the tuning parameter of $l_1$ penalty as a scalar parameter and will automatically generate a sequence of candidate values for $\lambda_1$.
+
+
+* \code{lam2.vec}: An optional argument. It should be a numerical vector containing candidate values of $\lambda_2$ for Frobenius norm penalty. If no input is given (by default), the function will automatically generate a sequence of candidate values for $\lambda_2$.
+
+* \code{K}: An optional argument which is the number of folds in cross validation. The default value is 3.
+	
+* \code{method}, \code{tol}, \code{maxit}, \code{steptype}: These are optional arguments having the same meanings and same default values as in the function \code{gconcord}.
+
+
+
+This function returns an object containing six variables:
+
+* \code{val.error}: validation errors, a matrix showing the average loss of $K$-fold cross validation under a specific combination of tuning parameters. The attributes of the matrix are \code{lambda1} and \code{lambda2}. The row name of the matrix corresponds to the candidate values for $\lambda_1$, while the column names of the matrix correspond to the candidate values for $\lambda_2$. If $\Lambda_1$ is provided from the user for the argument \code{lam1.vec}, then the row name of the matrix will be indicated as -1. 
+
+* \code{val.error.quantile}: quantiles of validation errors, a matrix showing the quantile of each element in \code{val.error}. This is used for the purpose of better visualization of different loss values in function \code{cvplot}.
+
+* \code{lam1.optimal}: the optimal value of tuning parameter $\lambda_1$, or the value of penalty matrix $\Lambda_1$.
+
+* \code{lam2.optimal}: the optimal value of tuning parameter $\lambda_2$.
+
+* \code{lam1.cand}: candidate values for $\lambda_1$ used in cross validation, or the value of input $\Lambda_1$ matrix.
+
+* \code{lam2.cand}: candidate values for $\lambda_2$ used in cross validation.
+
+
+
+
+The default loss function in \code{cv.gconcord} is the predictive risk loss function. For a parameter estimate $\hat\Omega = ((\hat\omega_{ij}))_{1\leq i,j\leq p}$ and sample data $y_1, \cdots, y_n$. Let $Y = (y_1, \cdots, y_n)^{\top}$ and $Y_j$ be the $j$-th column of $Y$. Then predictive risk loss function is defined as:
+
+\begin{equation}
+\label{pred.risk}
+\mathcal{L}(\hat\Omega, Y) = \frac{1}{n}\sum_{i=1}^p\biggl\|Y_i - \sum_{j\neq i}\biggl(-\frac{\hat\omega_{ij}}{\hat\omega_{ii}}\biggr)Y_j\biggr\|_2^2
+\end{equation}
+
+The function \code{pred.risk} takes two arguments:
+
+* \code{omega}: a parameter estimate $\hat\Omega$;
+* \code{data}:  a data matrix $Y$.
+
+and it returns a loss value $\mathcal{L}(\hat\Omega, Y)$. To better deliver cross validation results, \pkg{gconcord} package also provides a visualization function \code{cvplot} that draws either a contour plot of loss values over a grid of candidate values of $\lambda_1, \lambda_2$, or a curve plot of loss valus over candidate values of one of the parameters if another is fixed. Details of this function can be found in Appendix part. 
+
+
+The \proglang{R} package \pkg{gcocnord} also provides two supporting functions for users. One is \code{get.data} that can extract data from Dow Jones Industrial Average data over specific time horizon for analysis purpose. Another is \code{zero.count} that count the number / ratio of zero elements of a resulting estimator. Please see Appendix part for more details.
+
+
+
+
+
+
+
+
+
+# Examples
+
+In the following examples, we use Dow Jones Industrial Average (DJIA) historical data from 2017-12-01 to 2017-12-31 from the dataset \code{return} as the input data. This part of dataset contains the daily arithmatic returns of 30 component stocks in DJIA Index from 1990/01/03 to 2018/02/28. It has 20 rows (observations) and 30 columns (stocks), and contains missing values. The data can be obtained using function \code{get.data} as follows:
+
+```{r message = FALSE, warning = FALSE, echo = FALSE}
+library(gconcord)
+```
+
+```{r message = FALSE}
+data = get.data( start = "2017-12-01", end = "2017-12-31", type = "return")
+dim(data)
+```
+
+
+
+To compute a graphical CONCORD estimator and build a corresponding graph, it is necessary to determine the tuning parameters by selecting a loss function and conduct cross validation. We consider two cases: (1) users do not have prior information about the matrix parameter $\Lambda_1$ for $l_1$ penalty, (2) users have prior information about the matrix parameter and can provide the matrix $\Lambda_1$. We will illusrtate the two cases seperately.
+
+
+
+
+## Sparse estimation without prior L-1 penalty information
+
+### Cross validation
+
+
+We consider how to estimate a sparse inverse covariance matrix without knowing prior $l_1$ matrix penalty information. In this case, it is assumed that for $\Lambda_1 = ((\lambda_{ij}))_{1\leq i,j\leq p}$, $\lambda_{ij} := \lambda_1$ for all $1\leq i, j\leq p, i\neq j$. Under this assumption, the first step is to find out the optimal values for the tuning parameters $\lambda_1$ and $\lambda_2$. The function \code{cv.gconcord} conducts cross validation for the tuning parameters when data are available. The \proglang{R} code for 5-fold cross validation is
+
+
+```{r message = FALSE}
+set.seed(1)
+res1 = cv.gconcord(data, K = 5)
+res1$lam1.optimal  ## optimal lambda1
+res1$lam2.optimal  ## optimal lambda2
+```
+
+
+The above cross validation uses the predictive risk loss function defined in Equation (\ref{pred.risk}). Users also can define their own loss function. Two requirements for the user-defined loss function are: First, the function would take the parameter estimate \code{omega} and the data \code{data} as two input arguments; Second, the function should return a scalar loss value. Users only need to specify the argument \code{FUN} in \code{cv.gconcord} as the name of their defined loss function. For example, a user can define the loss function to be the negative of Gaussian log-likelihood as:
+
+
+\begin{equation} \label{negG}
+\mathcal{L}(\hat\Omega, Y) = 
+-n\log\text{det}\hat\Omega + \text{tr}(\hat\Omega Y^{\top} Y) 
+\end{equation}
+
+
+```{r}
+negL <- function(omega, data){
+  n <- nrow(data)
+  loss <- -n * log(max(det(omega), 1e-15)) + ## add a threshold to avoid log(0)
+    sum(diag(omega %*% t(data) %*% data))
+  return(loss)
+}
+```
+
+
+and the cross validation is
+
+```{r message = FALSE}
+set.seed(1)
+res2 = cv.gconcord(data, K = 5, FUN = negL)
+res2$lam1.optimal   ## optimal lambda1
+res2$lam2.optimal   ## optimal lambda2
+```
+
+
+Our package provides a function \code{cvplot} to visualize the results of cross validation. It offers a straightforward interpretation for users about the optimal location for tuning parameters. For the predictive risk and negative log-likelihood loss function, the contour plots of average loss values and loss quantiles over the grid of $(\lambda_1, \lambda_2)$ can be plotted in Figure 1 and Figure 2 via the following code.
+
+
+
+```{r fig.align="center", fig.width=7, fig.height=3.5, fig.cap = "Predictive risk loss function"}
+p1 <- cvplot(res1$val.error, main = "Loss values")
+p2 <- cvplot(res1$val.error.quantile, main = "Loss quantiles")
+library(gridExtra)
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+```{r fig.align="center", fig.width=7, fig.height=3.5, fig.cap = "Negative log-likelihood loss function"}
+p1 <- cvplot(res2$val.error, main = "Loss values")
+p2 <- cvplot(res2$val.error.quantile, main = "Loss quantiles")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+Generally, the loss quantiles can better differentiate the magnitudes of validation errors in the visualization than the loss values. Both quantities would present the same relative loss magnitudes and the same combinations of optimal tuning parameters. In addition, if an optimal point is located along the non-zero boundary of tuning parameters, that may indicate that the range of candidate values of tuning parameters is not wide enough, and a wider range of candidate values should be included in the arguments \code{lam1.vec} or \code{lam2.vec} in the function \code{cv.gconcord}.
+
+
+
+
+
+
+### Graphical Concord estimator and graph visualization
+
+After computing the optimal tuning parameters for $\lambda_1$ and $\lambda_2$, it is easy to obtain a graphical CONCORD estimator and the corresponding graph as follows:
+
+```{r fig.align="center", fig.width=7, fig.height=3.5, message = FALSE}
+omega1 <- gconcord(data = data, lambda1 = res1$lam1.optimal, 
+                   lambda2 = res1$lam2.optimal)
+omega2 <- gconcord(data = data, lambda1 = res2$lam1.optimal, 
+                   lambda2 = res2$lam2.optimal)
+p1 <- graphplot(omega1, edge.width = 0.5, varnames = colnames(data), 
+                main = "Predictive risk")
+p2 <- graphplot(omega2, edge.width = 0.5, varnames = colnames(data), 
+                main = "Negative log-likelihood")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+
+
+
+## Sparse estimation with prior L-1 penalty matrix information
+
+In this section, we will continue our previous DJIA example to illustrate how to compute Graphical CONCORD with prior $l_1$ penalty matrix $\Lambda_1$. Suppose a user is able to obtain prior information for the $l_1$ penalty matrix $\Lambda_1$ and the user constructs it based on the industry one company belongs to. Further suppose that the 30 component stocks of DJIA can be classified into the following industries in Table \ref{category}.
+
+
+
+ \begin{table}[h]
+ 	\label{category}
+ 	\begin{center}
+ 	\begin{tabular}{c|c|c}
+ 		Industry & Count & Company stock code\\\hline
+ 		Technology & 6 & AAPL, CSCO, IBM, INTC, MSFT, V \\
+ 		Food \& Retails & 6 & HD, KO, MCD, NKE, PG, WMT\\
+ 		Pharmaceuticals \& Health & 4 & JNJ, MRK, PFE, UNH\\
+ 		Construction \& Mining & 4 & BA, CAT, MMM, UTX\\
+ 		Financial Services & 4 & AXP, GS, JPM, TRV \\
+ 		Energy & 3 & CVX, GE, XOM\\
+ 		Chemical & 1 & DWDP\\
+ 		Entertainment & 1 & DIS\\
+ 		Telecommunication & 1 & VZ\\\hline
+ 		Total & 30 &  
+ 	\end{tabular}
+ \end{center}
+\caption{All 30 components can be classified into 9 industries. A user believes that companies between different industries are more heterogeneous and independent, while companies within the same industry are more homogeneous and dependent to each other.}
+\end{table}
+
+Assume that a user believes that stocks from different industries are independent of each other, while stocks withing the same industry are dependent to each other. $l_1$ penalty parameters corresponding to pair of stocks from different industries can be assigned with large values, and assume that the user is able to estimate the best $l_1$ penalty parameter within each industry as follows:
+
+
+
+
+```{r}
+# Define categories
+All <- colnames(data)
+Tech <- c("AAPL","CSCO","IBM","INTC","MSFT","V") ## Technology
+Food <- c("HD","KO","MCD","NKE","PG","WMT")      ## Food
+Pham <- c("JNJ","MRK","PFE","UNH")               ## Pharmaceuticals
+Cons <- c("BA","CAT","MMM","UTX")                ## Construction
+Fina <- c("AXP","GS","JPM","TRV")                ## Finance
+Engy <- c("CVX","GE","XOM")                      ## Energy
+Chem <- c("DWDP")                                ## Chemistry
+Ettm <- c("DIS")                                 ## Entertainment
+Tele <- c("VZ")                                  ## Telecommunication
+```
+
+
+Suppose a user chooses the $l_1$ penalty based on the industries as follows:
+
+```{r}
+# Construct prior penalty matrix Lambda
+Lam <- matrix(100, ncol(data), ncol(data), dimnames = list(All, All))
+Lam[Tech, Tech] <- 0.01
+Lam[Food, Food] <- 0.02
+Lam[Pham, Pham] <- 0.05
+Lam[Cons, Cons] <- 0.01
+Lam[Fina, Fina] <- 0.01
+Lam[Engy, Engy] <- 0.03
+Lam[Chem, Chem] <- 0.04
+Lam[Ettm, Ettm] <- 0.05
+Lam[Tele, Tele] <- 0.04
+```
+
+
+
+With this user-defined $l_1$ penalty matrix $\Lambda_1$, cross validation is only conducted over $\lambda_2$ in function \code{cv.gconcord}. Following code shows the cross validation using predictive risk and negative log-likelihood loss functions. Figure 3 and Figure 4 present the results.
+
+```{r fig.align="center", fig.width=7, fig.height=3.5, fig.cap="Predictive risk loss function"}
+# Predictive risk loss function
+res3 <- cv.gconcord(data = data, lam1.vec = Lam, K = 5)  
+par(mfrow=c(1,2))
+cvplot(res3$val.error, ylab = "Loss values")
+cvplot(res3$val.error.quantile, ylab = "Loss quantiles")
+```
+
+
+```{r echo = TRUE, fig.align="center", fig.width=7, fig.height=3.5, fig.cap="Negative log-likelihood loss function"}
+# Negative log-likelihood loss function
+res4 <- cv.gconcord(data = data, lam1.vec = Lam, K = 5, FUN = negL)
+par(mfrow=c(1,2))
+cvplot(res4$val.error, ylab = "Loss values")
+cvplot(res4$val.error.quantile, ylab = "Loss quantiles")
+```
+
+
+
+With the cross validation results, it is easy to compute corresponding graphical CONCORD estimator and plot the graphs as follows:
+
+
+```{r echo = FALSE, fig.align="center", fig.width=7, fig.height=3.5}
+omega3 <- gconcord(data = data, lambda1 = res3$lam1.optimal, lambda2 = res3$lam2.optimal)
+omega4 <- gconcord(data = data, lambda1 = res4$lam1.optimal, lambda2 = res4$lam2.optimal)
+p1 <- graphplot(omega3, edge.width = 0.5, varnames = colnames(data), 
+                main = "Predictive risk")
+p2 <- graphplot(omega4, edge.width = 0.5, varnames = colnames(data), 
+                main = "Negative log-likelihood")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+
+
+
+There are some special cases where our package can still be applied. For instance, in some applications only a sample covariance matrix of the raw data is available, and users are still able to use our package to compute graphical CONCORD estimator by directly inputing the sample covariance matrix into the function \code{gconcord}. In this process, no cross validation can be conducted because raw data are not available, and users have to provide values of tuning parameters. For the purpose of illustration, we use the DJIA component stocks returns from 2008/03/01 to 2008/03/31 as the underlying data and assume that these data are not available, only the sample covariance matrix is available, then our package still can compute its graphical CONCORD estimator as follows:
+
+```{r eval = FALSE}
+data2 = get.data( start = "2008-03-01", end = "2008-03-31", na.rm = FALSE)  
+
+# Assume data are not available and only S is available
+S = cov(data2, use = "complete.obs")   ## assume only S is available
+omega <- gconcord(S = S, lambda1 = 0.2, lambda2 = 0.1)
+```
+
+
+
+
+
+# Running Time Comparison
+
+In this section we do simulation work to compare the running time of using different optimization methods. Because the actual input in the optimization problem (\ref{opt1}) is the sample covariance matrix $S$, the dimensionality of $S$, rather than the sample size, would impact the running time of numerical solutions. Motivated by this, we compare the running time of each optimization method under different dimensionality and $\gamma$ (i.e. the ratio of sample size over dimension). 
+
+Suppose $\Omega$ is a true inverse covariance matrix with 30\% nonzero elements with dimension $p = 500, 800, 1000, 1500, 2000$. We generate $n = \gamma p$ i.i.d. samples from $\mathcal{N}(\mathbf{0}, \Omega^{-1})$, set $\lambda_1 = 0.1, \lambda_2 = 0.2$, and compute CONCORD estimator under different optimization methods. For each case, we obtain Results are shown in the Table 3. From the results, ISTA generally requires least number of iterations in the calculation and has the least running time. When dimension increases, running time of coordinatewise descent algorithm increases rapidly and becomes the lagest among all.
+
+```{r echo = FALSE, eval = FALSE}
+# Sparse matrix generator
+Generate.sparse.mat <- function(k, sparsity = 0.3, seed = 1){
+  library(pracma)
+  while (TRUE) {
+    # generate the symmetric sparsity mask
+    set.seed(seed)
+    mask = rand(k)
+    mask = mask * (mask < sparsity)
+    mask[lower.tri(mask, diag = TRUE)] = 0
+    mask = mask + t(mask) + eye(k)
+    mask[mask > 0] = 1
+    
+    # generate the symmetric precision matrix
+    set.seed(seed)
+    omega = matrix(rnorm(k^2), k)
+    omega[lower.tri(omega, diag = TRUE)] = 0
+    omega = omega + t(omega) + eye(k)
+    
+    # apply the reqired sparsity
+    omega = omega * mask
+    omega = omega - (min(eig(omega))-.1) * eye(k)
+    
+    if(sum(eigen(omega)$values > 0) == k) {
+      break
+    } else {
+      print('Theta is not positive definite!')
+    }
+  }
+  return(omega)
+}
+```
+
+
+
+```{r message = FALSE, warning = FALSE, eval = FALSE, echo = FALSE}
+library(foreach)
+library(iterators)
+library(doParallel)
+library(tcltk)
+
+Generate.running.time <- function(p, gamma){
+  
+  # generate sample covariance matrix
+  omega <- Generate.sparse.mat(p)
+  set.seed(p)
+  data <- MASS::mvrnorm(n = gamma * p, mu = rep(0, p), Sigma = solve(omega))
+  S = cov(data)
+  
+  # parallel computing gconcord under 3 methods
+  methods = c("coordinatewise", "ista", "fista")
+  n = length(methods)
+  a <- detectCores() - 1
+  cl <- makeCluster(a)
+  registerDoParallel(cl)
+  time3 <- system.time({
+    # clusterExport(cl, c("n"))
+    k <- foreach(i = icount(n), .packages = "tcltk", .combine = rbind.data.frame) %dopar% {
+      if(!exists("pb")) pb <- tkProgressBar("Parallel task", min = 1, max = n)
+      setTkProgressBar(pb, i)
+      Sys.sleep(0.05)
+      # Functions start here
+      library(gconcord)
+      start <- Sys.time()
+      omega <- gconcord(S = S, method = methods[i], lambda1 = 0.1, lambda2 = 0.2, maxit = 300)
+      end <- Sys.time()
+      ans <- data.frame(start = start, end = end, nitr = omega$nitr)
+      rownames(ans) <- methods[i]
+      ans
+    }
+  })
+  stopCluster(cl)
+  return(k)
+}
+
+```
+
+
+```{r eval = FALSE, echo = FALSE}
+address = "C:/Users/Aaron Zhou/Desktop/Github/zhipuPhdResearch/JSS/manuscript/JSS manuscript"
+for(gamma in c(0.5, 1, 2)){
+  p <- 500
+  res <- Generate.running.time(p = p, gamma = gamma)
+  save.image(paste(address, "/p", p, "g", gamma,".RData", sep = ""))
+}
+```
+
+
+```{r echo = FALSE, warning = FALSE, message = FALSE, eval = FALSE}
+address = "C:/Users/Aaron Zhou/Desktop/Github/zhipuPhdResearch/JSS/manuscript/JSS manuscript"
+ans <- NULL
+
+for(p in c(500, 800, 1000, 1500, 2000)){
+  for(gamma in c(0.5, 1, 2)){
+    load(paste(address, "/p", p, "g", gamma, ".RData", sep = ""))
+    if( p < 400 ){
+      dif <- as.vector(round( difftime(res$end, res$start, units = "secs"), 2))
+    }else{
+      dif <- as.vector(round( difftime(res$end, res$start, units = "mins"), 2))
+    }
+    nitr <- res$nitr
+    tmp <- c(p, gamma, paste(dif[1], "/", nitr[1]), paste(dif[2], "/", nitr[2]), paste(dif[3], "/", nitr[3]))
+    ans <- rbind(ans, tmp)
+  }
+}
+colnames(ans) <- c("p", "gamma", "cdws", "ista", "fista")
+rownames(ans) <- NULL
+
+library(dplyr)
+library(knitr)
+library(kableExtra)
+```
+
+```{r echo = FALSE}
+ans <- data.frame(p = rep(c(500, 800, 1000, 1500, 2000), each = 3),
+                  gamma = rep(c(0.5, 1, 2), 5),
+                  coordinate.wise = c("0.39/76", "0.35/75", "0.35/74", 
+                                      "5.82/78", "6.68/82", "5.78/83",
+                                      "10.35/74", "14.33/102", "14.27/100", 
+                                      "52.52/92", "52.62/92", "56.25/100", 
+                                      "119.04/87", "104.35/76", "119.29/87"),
+                  ista = c("0.16/52", "0.14/60", "0.11/50",
+                           "0.46/57", "0.63/58", "0.49/49",
+                           "0.77/52", "0.77/59", "0.87/65",
+                           "2.22/69", "2.32/78", "2.04/70",
+                           "4.17/59", "3.98/66", "3.94/64"),
+                  fista = c("0.97/175", "1.42/268", "0.71/144",
+                            "3.27/152", "4.30/174", "2.46/129", 
+                            "7.46/300", "5.86/248", "4.17/142", 
+                            "12.06/173", "11.53/163", "13.98/244",
+                            "21.49/153",  "23.84/179", "25.14/219"))
+```
+
+
+```{r echo = FALSE}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+ans %>% 
+  kable(caption = "Running time comparison. For each case of p and gamma, running time in minutes / number of iterations are shown for cdws (coordinatewise descent), ISTA, and FISTA.") %>% 
+  kable_styling(bootstrap_options = "striped") 
+```
+
+
+
+# Conclusion
+
+
+
+
+This paper mainly focuses on intruducing the package \pkg{gconcord} that estimates a sparse inverse covariance matrix via graphical CONCORD method. \pkg{gconcord} is a flexible and easy to use package. This paper briefly summarizes related \proglang{R} packages and how graphical CONCORD is proposed. We present the graphical CONCORD model and its two numerical solution methods.  Next, main functions in \pkg{gconcord} and their examples using DJIA historical data are discussed in details in Section 3 and 4. Finally, we comapre the running time of different methods of graphical CONCORD optimization problem. 
+
+
+
+
+# Appendix 1
+
+The solution of updating operator $T_{ij}$ for CONCORD estimator has been proved by @Khare2015. For graphical CONCORD with elastic net penalty, we can derive the solution as follows. Let $Q_{con}(\Omega) = Q_{con}(\Omega|S, \Lambda_1, \lambda_2)$. For $1\leq i\leq p$,
+
+$$
+Q_{con}(\Omega) = -\log\omega_{ii} + \frac{1}{2}\biggl(\omega_{ii}^2s_{ii} + 2\omega_{ii}\sum_{j\neq i}\omega_{ij}s_{ij}\biggr) + \lambda_2\omega_{ii}^2 + \text{terms independent of }\omega_{ii}
+$$
+
+So 
+
+$$
+\frac{\partial}{\partial\omega_{ii}}Q_{con}(\Omega) = 0
+\quad\Leftrightarrow\quad
+-\frac{1}{\omega_{ii}} + \frac{1}{2}\biggl(2\omega_{ii}s_{ii} + 2\sum_{j\neq i}\omega_{ij}s_{ij}\biggr) + 2\lambda_2\omega_{ii} = 0
+$$
+
+Solve the equation, and because $\omega_{ii} > 0$, we obtain a positive root:
+
+$$
+\omega_{ii} = \frac{-\sum_{j\neq i}\omega_{ij}s_{ij} + \sqrt{\biggl(\sum_{j\neq i}\omega_{ij}s_{ij}\biggr)^2 + 4(2\lambda_2 + s_{ii})}}{2(s_{ii} + 2\lambda_2)}
+$$
+
+In addition, for $1\leq i< j\leq p$,
+
+\begin{equation*}
+\begin{split}
+Q_{con}(\Omega) = & \frac{s_{ii} + s_{jj}}{2}\omega_{ij}^2 + \biggl(\sum_{h\neq j}\omega_{ih}s_{jh} + \sum_{k\neq i}\omega_{kj}s_{ik}\biggr)\omega_{ij} + 2\lambda_{ij}|\omega_{ij}| + 2\lambda_2\omega_{ij}^2\\
+& + \text{terms independent of }\omega_{ij}
+\end{split}
+\end{equation*}
+
+Hence,
+
+$$
+\omega_{ij} = \frac{\mathcal{S}_{2\lambda_{ij}}\biggl(-\biggl(\sum_{h\neq j}\omega_{ih}s_{jh} + \sum_{k\neq i}\omega_{ki}s_{ik}\biggr)\biggr)}{s_{ii} + s_{jj} + 4\lambda_2}
+$$
+
+where the soft-thresholding operator $\mathcal{S}_{\eta}$ is given by $\mathcal{S}_{\eta} = \text{sign}(x)(|x| - \eta)_+$
+
+
+# Appendix 2
+
+### graphplot function
+
+The \code{graphplot} function has the following arguments:
+
+
+* \code{met}: the graphical CONCORD estimator;
+* \code{varnames}: optional, a valid value for that component of graphical CONCORD estimator. This is either \code{NULL} or a character vector of non-zero length equal to the appropriate dimension;
+* \code{main}: optional, an overall title for the plot;
+* \code{seed}: optional, a single value, interpreted as an integer in \code{set.seed};
+* \code{mode}: optional, a character string indicating a placement method of graphical nodes. Default value is \code{circle}. See \code{GGally::ggnet2} for more details.
+* \code{label}: optional, a logical value indicating whether to label the nodes. Default is \code{TRUE}. See \code{GGally::ggnet2} for more details.
+* \code{edge.width}: optional, a numeric value controling the width of edges. Default value is 1.
+* \code{color}: optional, the color of nodes. Default is \code{lightpink}.
+* \code{edge.color}: optional, the color of edges. Default is \code{gray}. See \code{GGally::ggnet2} for more details.
+* \code{edge.size}: optional, the size of the edges, in points, as a numeric value, a vector of numeric values, or as an edge attribute containing numeric values. Default value is \code{weights}. See \code{GGally::ggnet2} for more details.
+* \code{...}: optional, other arguments in \code{GGally::ggnet2}.
+
+
+
+### cvplot function
+
+The cross validation plotting function \code{cvplot} draws either a contour plot of loss values over a grid of candidate $\lambda_1, \lambda_2$ values, or a curve plot of loss valus over candidate values of $\lambda_2$ when $l_1$ penalty parameter is fixed or is a matrix. The function has following arguments:
+
+
+* \code{mat}: a matrix of loss values from cross validation. Generally \code{val.error} is used for a curve plot while \code{val.error.quantile} is used for a contour plot.
+	
+* \code{col.regions}: optional, a color vector to be used. Please refer to \code{col.regions} argument in function \code{levelplot} in the package \pkg{lattice}. Default value is \code{heat.colors(100)}.
+	
+* \code{scales}: optional, a list object rotating labels of axises. Default is \code{list(x=list(rot=90))} which rotates x-axis label by 90 degrees.
+	
+* \code{contour}: optional, a logical value indicating if contour curves are shown in the heatmap. Default is \code{TRUE}.
+	
+* \code{xlab}: optional, a title for x axis.
+* \code{ylab}: optional, a title for y axis.
+* \code{main}: optional, an overall title for the plot.
+* \code{...}: optional. Other possible arguments for contour plot, see \code{lattice::levelplot}. Or for curve plots, see \code{plot}.
+
+
+### get.data function
+
+The \code{get.data} function extracts data from DJIA historical data over specific time horizon. It has the following arguments:
+
+* \code{start}: optional, a character string indicating the start date of data, with format \code{YYYY-MM-DD}. Default value is \code{"1990-01-03"}.
+* \code{end}: optional, a character string indicating the end date of data, with format \code{YYYY-MM-DD}. Default value is \code{"2018-02-28"}.
+* \code{type}: optioanl, a character string indicating the type of data to extract. Available choices include:
+
+   - \code{return}: the daily arithmetic return of 30 component stocks of DJIA; the maximum time horizon is from 1990-01-03 to 2018-02-28.
+   - \code{price}: the daily closing prices of 30 component stocks of DJIA; the maximum time horizon is from 1990-01-02 to 2018-02-28.
+   - \code{index}: the daily closing price of DJIA index; the maximum time horizon is from 1990-01-02 to 2018-03-02.
+
+
+### zero.count function
+
+The function \code{zero.count} measures the sparsity level of a graphical CONCORD estimator. It has following arguments:
+
+* \code{mat}: a numerical matrix;
+* \code{ratio}: optional, a logic value indicating if a ratio of number of zero elements over total number of elements is returned. Default value is \code{TRUE}.
+* \code{thres}: optional, a small numerical threshold identifying zero elements. Default value is \code{1e-5}.
+
+The function either returns the number of zero elements in the estimator or a ratio of the number of zero elements over the number of all elements.
+
+# Reference
