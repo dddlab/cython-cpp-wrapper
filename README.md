@@ -5,7 +5,9 @@ Credit: minimally modified [`eigency_tests`](https://github.com/wouterboomsma/ei
 ## Installing and Testing
 
 ```bash
-git clone https://github.com/dddlab/cython-cpp-wrapper.git
-CYTHONIZE=1 pip install cython-cpp-wrapper/
-pytest cython-cpp-wrapper/tests/
+# git clone https://github.com/dddlab/cython-cpp-wrapper.git
+# cd cython-cpp-wrapper
+
+CYTHONIZE=1 pip install .
+pytest tests/
 ```
