@@ -6,6 +6,7 @@
 
 void function_w_mat_arg(
     Eigen::Map<Eigen::MatrixXd> &mat,
+    Eigen::Map<Eigen::VectorXd> &vec,
     double epstol
 );
 
